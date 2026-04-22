@@ -181,6 +181,8 @@ def test_cli_sync_without_force_flag() -> None:
 
 def test_cli_search_no_results() -> None:
     """search prints 'No results found.' when both hit lists are empty."""
+    from qdrant_client.models import SparseVector
+
     runner = CliRunner()
     with patch("vault_qdrant.cli._load_env"), \
          patch("vault_qdrant.cli._make_client") as MockClient, \
@@ -191,11 +193,13 @@ def test_cli_search_no_results() -> None:
         MockOllama.return_value = mock_ollama_inst
 
         mock_bm25_inst = MagicMock()
-        mock_bm25_inst.embed.return_value = {}
+        mock_bm25_inst.embed.return_value = SparseVector(indices=[], values=[])
         MockBM25.return_value = mock_bm25_inst
 
         mock_qdrant = MagicMock()
-        mock_qdrant.search.return_value = []
+        mock_result = MagicMock()
+        mock_result.points = []
+        mock_qdrant.query_points.return_value = mock_result
         MockClient.return_value = mock_qdrant
 
         result = runner.invoke(main, ["search", "test query"])
