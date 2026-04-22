@@ -277,12 +277,18 @@ def _merge_sections(sections: list[_Section]) -> list[_Section]:
             continue
 
         # We have a pending tiny section — try to merge with current.
-        # Merging is allowed across different H2 siblings (the tiny section's
-        # content is prepended to the absorbing sibling, which keeps its own h2).
-        # We only refuse to merge across different H1 top-level boundaries.
+        # Cross-H2 merging is allowed when the pending section has no H3 (i.e.
+        # it is a plain H2-level section). When the pending section carries an
+        # H3 heading we must NOT merge it across an H2 boundary, because that
+        # would silently lose the H3 breadcrumb in the absorbing sibling.
         same_h1 = pending.h1 == sec.h1
+        same_h2 = pending.h2 == sec.h2
+        pending_has_h3 = pending.h3 is not None
         is_preamble_sec = sec.h2 is None and sec.h3 is None
-        if same_h1 and not is_preamble_sec:
+        # Allow merge when: same H1, not a preamble, and either same H2 (always
+        # fine) or pending has no H3 (cross-H2 merge won't lose any breadcrumb).
+        can_merge = same_h1 and not is_preamble_sec and (same_h2 or not pending_has_h3)
+        if can_merge:
             combined_raw = pending.raw_text.rstrip() + "\n\n" + sec.raw_text
             combined_text = pending.text.rstrip() + "\n\n" + sec.text
             combined_links = pending.forward_links + sec.forward_links
@@ -301,7 +307,7 @@ def _merge_sections(sections: list[_Section]) -> list[_Section]:
                 merged.append(merged_sec)
                 pending = None
         else:
-            # Different H1 boundary or preamble — flush pending as-is even if small
+            # Different H1/H2 boundary or preamble — flush pending as-is even if small
             merged.append(pending)
             pending = None
             if not is_preamble_sec and _count_tokens(sec.text) < _MERGE_THRESHOLD:
