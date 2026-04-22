@@ -39,9 +39,9 @@ _SCROLL_BATCH = 100
 # ---------------------------------------------------------------------------
 
 
-def _chunk_id(file_path: str, h2: str | None) -> str:
-    """Return a deterministic 32-char hex ID from SHA-256(file_path + h2)."""
-    raw = (file_path + (h2 or "")).encode()
+def _chunk_id(file_path: str, h2: str | None, h3: str | None = None) -> str:
+    """Return a deterministic 32-char hex ID from SHA-256(file_path + h2 + h3)."""
+    raw = (file_path + (h2 or "") + (h3 or "")).encode()
     return hashlib.sha256(raw).hexdigest()[:32]
 
 
@@ -85,7 +85,7 @@ def _build_point(
 ) -> PointStruct:
     """Build a single PointStruct from doc + chunk + embeddings."""
     return PointStruct(
-        id=_chunk_id(doc["file_path"], chunk["h2"]),
+        id=_chunk_id(doc["file_path"], chunk.get("h2"), chunk.get("h3")),
         vector={
             "dense": dense_vector,
             "sparse": sparse_vector,
@@ -103,6 +103,7 @@ def _build_point(
             "forward_links": chunk.get("forward_links", []),
             "chunk_index": chunk.get("chunk_index"),
             "doc_hash": doc["doc_hash"],
+            "text": chunk.get("text", ""),
         },
     )
 

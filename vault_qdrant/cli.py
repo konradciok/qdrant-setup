@@ -22,7 +22,7 @@ from vault_qdrant.collection import VAULT_COLLECTION, ensure_vault_collection
 from vault_qdrant.contextualizer import Contextualizer
 from vault_qdrant.embedder import BM25Embedder, OllamaEmbedder
 from vault_qdrant.scanner import scan
-from vault_qdrant.upserter import delete_orphans, upsert_chunks
+from vault_qdrant.upserter import _existing_doc_hash, delete_orphans, upsert_chunks
 
 # ---------------------------------------------------------------------------
 # .env loading
@@ -120,6 +120,8 @@ def _sync_doc(
     force: bool,
 ) -> int:
     """Chunk, contextualize, and upsert a single doc. Returns number of chunks upserted."""
+    if not force and _existing_doc_hash(client, doc["file_path"]) == doc["doc_hash"]:
+        return 0
     effective_doc = {**doc, "doc_hash": ""} if force else doc
     raw_chunks = chunk(doc["content"], doc.get("type"))
     ctx_chunks = _contextualize_chunks(contextualizer, doc["content"], raw_chunks)

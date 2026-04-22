@@ -86,9 +86,9 @@ def mock_bm25_embedder() -> MagicMock:
 # ---------------------------------------------------------------------------
 
 
-def _expected_id(file_path: str, h2: str | None) -> str:
-    """Deterministic chunk ID as first-32-chars of SHA-256."""
-    raw = (file_path + (h2 or "")).encode()
+def _expected_id(file_path: str, h2: str | None, h3: str | None = None) -> str:
+    """Deterministic chunk ID as first-32-chars of SHA-256(file_path + h2 + h3)."""
+    raw = (file_path + (h2 or "") + (h3 or "")).encode()
     return hashlib.sha256(raw).hexdigest()[:32]
 
 
@@ -184,7 +184,7 @@ def test_upsert_has_dense_and_sparse_vectors(
 def test_chunk_id_is_sha256_of_file_path_and_h2(
     mock_client, mock_ollama_embedder, mock_bm25_embedder, sample_doc, sample_chunks
 ):
-    """Point IDs must be deterministic SHA-256 hashes of file_path + h2."""
+    """Point IDs must be deterministic SHA-256 hashes of file_path + h2 + h3."""
     upsert_chunks(
         mock_client, mock_ollama_embedder, mock_bm25_embedder, sample_doc, sample_chunks
     )
@@ -193,10 +193,17 @@ def test_chunk_id_is_sha256_of_file_path_and_h2(
     points = upsert_call.kwargs.get("points") or upsert_call.args[1]
 
     for point, chunk in zip(points, sample_chunks):
-        expected = _expected_id(sample_doc["file_path"], chunk["h2"])
+        expected = _expected_id(sample_doc["file_path"], chunk["h2"], chunk.get("h3"))
         assert point.id == expected, (
-            f"Expected ID {expected!r}, got {point.id!r} for h2={chunk['h2']!r}"
+            f"Expected ID {expected!r}, got {point.id!r} for h2={chunk['h2']!r} h3={chunk.get('h3')!r}"
         )
+
+    # Two chunks sharing the same H2 but with different H3 must produce different IDs
+    id_same_h2_no_h3 = _expected_id("file.md", "Section", None)
+    id_same_h2_with_h3 = _expected_id("file.md", "Section", "SubSection")
+    assert id_same_h2_no_h3 != id_same_h2_with_h3, (
+        "Chunks with same H2 but different H3 must not collide"
+    )
 
 
 # ---------------------------------------------------------------------------
