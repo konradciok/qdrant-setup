@@ -7,7 +7,6 @@ from qdrant_client.models import (
     SparseVectorParams,
     SparseIndexParams,
     CollectionStatus,
-    FieldIndexParams,
     KeywordIndexParams,
     DatetimeIndexParams,
     HnswConfigDiff,

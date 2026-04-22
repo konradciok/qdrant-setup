@@ -1,0 +1,269 @@
+"""Tests for QdrantUpserter — written BEFORE implementation (TDD).
+
+Uses unittest.mock to mock QdrantClient; no real Qdrant connection needed.
+"""
+from __future__ import annotations
+
+import hashlib
+from unittest.mock import MagicMock
+
+import pytest
+from qdrant_client.models import SparseVector
+
+from vault_qdrant.upserter import delete_orphans, upsert_chunks
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def sample_doc() -> dict:
+    """Minimal scanner document record."""
+    return {
+        "file_path": "projects/alpha.md",
+        "content": "# Alpha\nSome content.",
+        "tags": ["project", "alpha"],
+        "type": "project",
+        "created": "2024-01-01",
+        "status": "active",
+        "projects": ["medusa"],
+        "doc_hash": "abc123deadbeef",
+    }
+
+
+@pytest.fixture()
+def sample_chunks() -> list[dict]:
+    """Two minimal chunker records."""
+    return [
+        {
+            "text": "Alpha intro text",
+            "h1": "Alpha",
+            "h2": "Overview",
+            "h3": None,
+            "forward_links": ["beta.md"],
+            "chunk_index": 0,
+        },
+        {
+            "text": "Alpha details",
+            "h1": "Alpha",
+            "h2": "Details",
+            "h3": "Sub",
+            "forward_links": [],
+            "chunk_index": 1,
+        },
+    ]
+
+
+@pytest.fixture()
+def mock_client() -> MagicMock:
+    """QdrantClient mock that returns no existing scroll results by default."""
+    client = MagicMock()
+    # scroll returns (points, next_page_offset); empty by default
+    client.scroll.return_value = ([], None)
+    return client
+
+
+@pytest.fixture()
+def mock_ollama_embedder() -> MagicMock:
+    """OllamaEmbedder mock returning a 2560-dim dense vector."""
+    embedder = MagicMock()
+    embedder.embed.return_value = [0.1] * 2560
+    return embedder
+
+
+@pytest.fixture()
+def mock_bm25_embedder() -> MagicMock:
+    """BM25Embedder mock returning a minimal SparseVector."""
+    embedder = MagicMock()
+    embedder.embed.return_value = SparseVector(indices=[1, 2], values=[0.5, 0.3])
+    return embedder
+
+
+# ---------------------------------------------------------------------------
+# Helper
+# ---------------------------------------------------------------------------
+
+
+def _expected_id(file_path: str, h2: str | None) -> str:
+    """Deterministic chunk ID as first-32-chars of SHA-256."""
+    raw = (file_path + (h2 or "")).encode()
+    return hashlib.sha256(raw).hexdigest()[:32]
+
+
+# ---------------------------------------------------------------------------
+# Test 1: upsert_chunks calls client.upsert with correct collection name
+# ---------------------------------------------------------------------------
+
+
+def test_upsert_calls_upsert_points(
+    mock_client, mock_ollama_embedder, mock_bm25_embedder, sample_doc, sample_chunks
+):
+    """upsert_chunks() must call client.upsert() with the vault collection name."""
+    upsert_chunks(
+        mock_client, mock_ollama_embedder, mock_bm25_embedder, sample_doc, sample_chunks
+    )
+
+    assert mock_client.upsert.called, "client.upsert() was never called"
+    upsert_call_args = mock_client.upsert.call_args
+    assert upsert_call_args is not None
+
+    kwargs = upsert_call_args.kwargs
+    args = upsert_call_args.args
+    collection_name = kwargs.get("collection_name") or (args[0] if args else None)
+    assert collection_name == "vault", f"Expected 'vault', got {collection_name!r}"
+
+
+# ---------------------------------------------------------------------------
+# Test 2: upserted points contain all required payload fields
+# ---------------------------------------------------------------------------
+
+
+def test_upsert_payload_fields(
+    mock_client, mock_ollama_embedder, mock_bm25_embedder, sample_doc, sample_chunks
+):
+    """Each upserted point must carry the required payload fields."""
+    upsert_chunks(
+        mock_client, mock_ollama_embedder, mock_bm25_embedder, sample_doc, sample_chunks
+    )
+
+    assert mock_client.upsert.called
+    upsert_call = mock_client.upsert.call_args
+    points = upsert_call.kwargs.get("points") or upsert_call.args[1]
+
+    required_fields = {
+        "file_path",
+        "doc_type",
+        "tags",
+        "folder",
+        "modified_at",
+        "status",
+        "h1",
+        "h2",
+        "h3",
+        "forward_links",
+        "chunk_index",
+        "doc_hash",
+    }
+
+    assert points, "No points were upserted"
+    for point in points:
+        missing = required_fields - set(point.payload.keys())
+        assert not missing, f"Point missing payload fields: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# Test 3: each point has dense and sparse named vectors
+# ---------------------------------------------------------------------------
+
+
+def test_upsert_has_dense_and_sparse_vectors(
+    mock_client, mock_ollama_embedder, mock_bm25_embedder, sample_doc, sample_chunks
+):
+    """Each upserted point must have a 'dense' named vector and a 'sparse' sparse vector."""
+    upsert_chunks(
+        mock_client, mock_ollama_embedder, mock_bm25_embedder, sample_doc, sample_chunks
+    )
+
+    upsert_call = mock_client.upsert.call_args
+    points = upsert_call.kwargs.get("points") or upsert_call.args[1]
+
+    assert points
+    for point in points:
+        vectors = point.vector
+        assert "dense" in vectors, "Missing 'dense' vector"
+        assert "sparse" in vectors, "Missing 'sparse' vector"
+
+
+# ---------------------------------------------------------------------------
+# Test 4: chunk ID is SHA-256(file_path + h2)[:32]
+# ---------------------------------------------------------------------------
+
+
+def test_chunk_id_is_sha256_of_file_path_and_h2(
+    mock_client, mock_ollama_embedder, mock_bm25_embedder, sample_doc, sample_chunks
+):
+    """Point IDs must be deterministic SHA-256 hashes of file_path + h2."""
+    upsert_chunks(
+        mock_client, mock_ollama_embedder, mock_bm25_embedder, sample_doc, sample_chunks
+    )
+
+    upsert_call = mock_client.upsert.call_args
+    points = upsert_call.kwargs.get("points") or upsert_call.args[1]
+
+    for point, chunk in zip(points, sample_chunks):
+        expected = _expected_id(sample_doc["file_path"], chunk["h2"])
+        assert point.id == expected, (
+            f"Expected ID {expected!r}, got {point.id!r} for h2={chunk['h2']!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test 5: skip upsert when existing doc_hash matches
+# ---------------------------------------------------------------------------
+
+
+def test_skip_unchanged_doc_hash(
+    mock_client, mock_ollama_embedder, mock_bm25_embedder, sample_doc, sample_chunks
+):
+    """If existing Qdrant point has the same doc_hash, upsert must be skipped."""
+    existing_point = MagicMock()
+    existing_point.payload = {"doc_hash": sample_doc["doc_hash"]}
+    mock_client.scroll.return_value = ([existing_point], None)
+
+    upsert_chunks(
+        mock_client, mock_ollama_embedder, mock_bm25_embedder, sample_doc, sample_chunks
+    )
+
+    mock_client.upsert.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Test 6: delete_orphans removes points whose file_path is not in active set
+# ---------------------------------------------------------------------------
+
+
+def test_delete_orphan_points(mock_client):
+    """delete_orphans() must call client.delete() for orphaned file_paths."""
+    active_paths = {"projects/alpha.md", "projects/beta.md"}
+
+    # First scroll page: two points, one orphan
+    p1 = MagicMock()
+    p1.id = "id-orphan-1"
+    p1.payload = {"file_path": "archive/old.md"}  # orphan
+
+    p2 = MagicMock()
+    p2.id = "id-active-1"
+    p2.payload = {"file_path": "projects/alpha.md"}  # active
+
+    # Second scroll page: another orphan
+    p3 = MagicMock()
+    p3.id = "id-orphan-2"
+    p3.payload = {"file_path": "deleted/gone.md"}  # orphan
+
+    # Two scroll pages then done
+    mock_client.scroll.side_effect = [
+        ([p1, p2], "cursor-1"),
+        ([p3], None),
+    ]
+
+    count = delete_orphans(mock_client, active_paths)
+
+    assert mock_client.delete.called, "client.delete() was never called"
+    assert count == 2, f"Expected 2 orphans deleted, got {count}"
+
+    # Verify the delete call included orphan IDs (not active ones)
+    deleted_ids: set[str] = set()
+    for c in mock_client.delete.call_args_list:
+        points_selector = c.kwargs.get("points_selector") or (
+            c.args[1] if len(c.args) > 1 else None
+        )
+        if points_selector is not None:
+            ids = getattr(points_selector, "points", None)
+            if ids:
+                deleted_ids.update(ids)
+
+    assert "id-orphan-1" in deleted_ids
+    assert "id-orphan-2" in deleted_ids
+    assert "id-active-1" not in deleted_ids
