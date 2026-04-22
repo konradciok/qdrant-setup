@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 from qdrant_client.models import SparseVector
 
-from vault_qdrant.upserter import delete_orphans, upsert_chunks
+from vault_qdrant.upserter import _chunk_id, delete_orphans, upsert_chunks
 
 
 # ---------------------------------------------------------------------------
@@ -86,9 +86,9 @@ def mock_bm25_embedder() -> MagicMock:
 # ---------------------------------------------------------------------------
 
 
-def _expected_id(file_path: str, h2: str | None, h3: str | None = None) -> str:
-    """Deterministic chunk ID as first-32-chars of SHA-256(file_path + h2 + h3)."""
-    raw = (file_path + (h2 or "") + (h3 or "")).encode()
+def _expected_id(file_path: str, h2: str | None, h3: str | None, chunk_index: int = 0) -> str:
+    """Deterministic chunk ID as first-32-chars of SHA-256(file_path + h2 + h3 + chunk_index)."""
+    raw = (file_path + (h2 or "") + (h3 or "") + str(chunk_index)).encode()
     return hashlib.sha256(raw).hexdigest()[:32]
 
 
@@ -193,7 +193,7 @@ def test_chunk_id_is_sha256_of_file_path_and_h2(
     points = upsert_call.kwargs.get("points") or upsert_call.args[1]
 
     for point, chunk in zip(points, sample_chunks):
-        expected = _expected_id(sample_doc["file_path"], chunk["h2"], chunk.get("h3"))
+        expected = _expected_id(sample_doc["file_path"], chunk["h2"], chunk.get("h3"), chunk.get("chunk_index", 0))
         assert point.id == expected, (
             f"Expected ID {expected!r}, got {point.id!r} for h2={chunk['h2']!r} h3={chunk.get('h3')!r}"
         )
@@ -274,3 +274,19 @@ def test_delete_orphan_points(mock_client):
     assert "id-orphan-1" in deleted_ids
     assert "id-orphan-2" in deleted_ids
     assert "id-active-1" not in deleted_ids
+
+
+def test_duplicate_headings_different_chunk_index_no_collision() -> None:
+    """Two chunks with identical h2/h3 but different chunk_index must produce different IDs."""
+    id_first = _chunk_id("notes.md", "Notes", None, 0)
+    id_second = _chunk_id("notes.md", "Notes", None, 1)
+    assert id_first != id_second, (
+        "Chunks with duplicate headings but different chunk_index must not collide"
+    )
+
+
+def test_chunk_id_includes_chunk_index() -> None:
+    """chunk_index alone must change the resulting ID."""
+    id_zero = _chunk_id("file.md", "Section", "Sub", 0)
+    id_one = _chunk_id("file.md", "Section", "Sub", 1)
+    assert id_zero != id_one
