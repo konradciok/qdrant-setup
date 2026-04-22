@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vault-qdrant"
+version = "0.1.0"
+description = "Qdrant Vault Chunking pipeline for the Medusa project"
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8",
+    "fastembed>=0.4",
+    "anthropic>=0.43",
+    "tiktoken>=0.7",
+    "requests>=2.31",
+    "python-dotenv>=1.0",
+]
+
+[project.scripts]
+vault-qdrant = "vault_qdrant.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["vault_qdrant"]
