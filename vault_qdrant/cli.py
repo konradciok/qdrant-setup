@@ -115,16 +115,20 @@ def _sync_doc(
     client: QdrantClient,
     ollama: OllamaEmbedder,
     bm25: BM25Embedder,
-    contextualizer: Contextualizer,
+    contextualizer: Contextualizer | None,
     doc: dict,
     force: bool,
 ) -> int:
-    """Chunk, contextualize, and upsert a single doc. Returns number of chunks upserted."""
+    """Chunk, contextualize (if contextualizer provided), and upsert a single doc."""
     if not force and _existing_doc_hash(client, doc["file_path"]) == doc["doc_hash"]:
         return 0
     effective_doc = {**doc, "doc_hash": ""} if force else doc
     raw_chunks = chunk(doc["content"], doc.get("type"))
-    ctx_chunks = _contextualize_chunks(contextualizer, doc["content"], raw_chunks)
+    ctx_chunks = (
+        _contextualize_chunks(contextualizer, doc["content"], raw_chunks)
+        if contextualizer is not None
+        else raw_chunks
+    )
     upsert_chunks(client, ollama, bm25, effective_doc, ctx_chunks)
     return len(ctx_chunks)
 
@@ -147,13 +151,14 @@ def main() -> None:
 @main.command()
 @click.option("--vault", required=True, type=click.Path(exists=True), help="Path to Obsidian vault")
 @click.option("--force", is_flag=True, default=False, help="Re-upsert even if doc_hash unchanged")
-def sync(vault: str, force: bool) -> None:
+@click.option("--no-context", "no_context", is_flag=True, default=False, help="Skip Anthropic contextualisation")
+def sync(vault: str, force: bool, no_context: bool) -> None:
     """Scan vault, chunk docs, contextualize, and upsert into Qdrant."""
     _load_env()
     client = _make_client()
     ollama = _make_ollama()
     bm25 = BM25Embedder()
-    contextualizer = _make_contextualizer()
+    contextualizer = None if no_context else _make_contextualizer()
 
     ensure_vault_collection(client)
 
@@ -240,18 +245,20 @@ def search(query: str) -> None:
     dense_vec = ollama.embed(query)
     sparse_vec = bm25.embed(query)
 
-    dense_hits = client.search(
+    dense_hits = client.query_points(
         collection_name=VAULT_COLLECTION,
-        query_vector=("dense", dense_vec),
+        query=dense_vec,
+        using="dense",
         limit=20,
         with_payload=True,
-    )
-    sparse_hits = client.search(
+    ).points
+    sparse_hits = client.query_points(
         collection_name=VAULT_COLLECTION,
-        query_vector=("sparse", sparse_vec),
+        query=sparse_vec,
+        using="sparse",
         limit=20,
         with_payload=True,
-    )
+    ).points
 
     # Build id → hit lookup from both lists for payload retrieval after RRF
     all_hits: dict[Any, Any] = {h.id: h for h in dense_hits}
