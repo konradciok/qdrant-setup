@@ -50,8 +50,9 @@ def ensure_vault_collection(client: QdrantClient) -> None:
         },
         hnsw_config=HnswConfigDiff(m=16, ef_construct=200),
         optimizers_config=OptimizersConfigDiff(
-            default_segment_number=2, on_disk_payload=True
+            default_segment_number=2,
         ),
+        on_disk_payload=True,
     )
 
     # Create payload indexes for filtering
@@ -69,11 +70,11 @@ def _create_payload_indexes(client: QdrantClient) -> None:
     - status (keyword): Status filtering
     """
     indexes = {
-        "doc_type": KeywordIndexParams(),
-        "tags": KeywordIndexParams(),
-        "folder": KeywordIndexParams(),
-        "modified_at": DatetimeIndexParams(),
-        "status": KeywordIndexParams(),
+        "doc_type": KeywordIndexParams(type="keyword"),
+        "tags": KeywordIndexParams(type="keyword"),
+        "folder": KeywordIndexParams(type="keyword"),
+        "modified_at": DatetimeIndexParams(type="datetime"),
+        "status": KeywordIndexParams(type="keyword"),
     }
 
     for field_name, index_params in indexes.items():
