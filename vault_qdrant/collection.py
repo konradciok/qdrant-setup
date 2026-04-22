@@ -5,6 +5,7 @@ from qdrant_client.models import (
     VectorParams,
     Distance,
     SparseVectorParams,
+    SparseIndexParams,
     CollectionStatus,
     FieldIndexParams,
     KeywordIndexParams,
@@ -42,9 +43,11 @@ def ensure_vault_collection(client: QdrantClient) -> None:
     # Create collection with hybrid schema
     client.create_collection(
         collection_name=VAULT_COLLECTION,
-        vectors_config=VectorParams(size=2560, distance=Distance.COSINE),
+        vectors_config={
+            "dense": VectorParams(size=2560, distance=Distance.COSINE, on_disk=False),
+        },
         sparse_vectors_config={
-            "sparse": SparseVectorParams(index={"full_scan_threshold": 10000})
+            "sparse": SparseVectorParams(index=SparseIndexParams(on_disk=False))
         },
         hnsw_config=HnswConfigDiff(m=16, ef_construct=200),
         optimizers_config=OptimizersConfigDiff(
