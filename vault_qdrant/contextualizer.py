@@ -31,6 +31,9 @@ class Contextualizer:
         Calls Claude to generate 1-2 sentences situating the chunk within
         the document. Returns the context prepended to the chunk.
 
+        The document block is tagged cache_control=ephemeral so repeated calls
+        for different chunks of the same document reuse the cached tokens.
+
         Args:
             document: Full document text
             chunk: Chunk of text from the document
@@ -41,19 +44,28 @@ class Contextualizer:
         Raises:
             anthropic.APIError: If API call fails
         """
-        prompt = (
-            "Here is a document:\n<document>\n"
-            f"{document}\n"
-            "</document>\n\n"
-            "Situate this chunk in the document in 1-2 sentences:\n<chunk>\n"
-            f"{chunk}\n"
-            "</chunk>"
-        )
-
         response = self.client.messages.create(
             model=self.model,
             max_tokens=150,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"Here is a document:\n<document>\n{document}\n</document>",
+                            "cache_control": {"type": "ephemeral"},
+                        },
+                        {
+                            "type": "text",
+                            "text": (
+                                "\n\nSituate this chunk in the document in 1-2 sentences:\n"
+                                f"<chunk>\n{chunk}\n</chunk>"
+                            ),
+                        },
+                    ],
+                }
+            ],
         )
 
         context = response.content[0].text
