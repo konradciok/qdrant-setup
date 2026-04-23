@@ -39,6 +39,8 @@ def _extract_inline_tags(content: str) -> list[str]:
     blocked: list[tuple[int, int]] = []
     for i in range(0, len(fences) - 1, 2):
         blocked.append((fences[i].start(), fences[i + 1].end()))
+    if len(fences) % 2 != 0:
+        blocked.append((fences[-1].start(), len(content)))
 
     tags: list[str] = []
     for m in _INLINE_TAG_RE.finditer(content):
@@ -115,7 +117,7 @@ def scan(vault_path: str | Path) -> list[dict]:
 
         content = md_file.read_text(encoding="utf-8")
         frontmatter = _parse_frontmatter(content)
-        file_path = str(md_file.relative_to(root))
+        file_path = md_file.relative_to(root).as_posix()
 
         if frontmatter["type"] is not None:
             doc_type = frontmatter["type"]
