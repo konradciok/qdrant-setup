@@ -2,7 +2,7 @@
 
 Public API
 ----------
-upsert_chunks(client, ollama_embedder, bm25_embedder, doc, chunks) -> None
+upsert_chunks(client, dense_embedder, bm25_embedder, doc, chunks) -> None
     Embed all chunks for a document and batch-upsert them.
     Skips the document if its doc_hash matches the stored hash.
 
@@ -26,7 +26,7 @@ from qdrant_client.models import (
 )
 
 from vault_qdrant.collection import VAULT_COLLECTION
-from vault_qdrant.embedder import BM25Embedder, OllamaEmbedder
+from vault_qdrant.embedder import BM25Embedder, DenseEmbedder
 
 if TYPE_CHECKING:
     from qdrant_client import QdrantClient
@@ -92,13 +92,14 @@ def _build_point(
             chunk.get("chunk_index", 0),
         ),
         vector={
-            "dense": dense_vector,
+            "fast-bge-large-en-v1.5": dense_vector,
             "sparse": sparse_vector,
         },
         payload={
             "file_path": doc["file_path"],
             "folder": dirname(doc["file_path"]) or ".",
             "doc_type": doc.get("type"),
+            "type_source": doc.get("type_source", "inferred"),
             "tags": doc.get("tags", []),
             "modified_at": modified_at,
             "status": doc.get("status"),
@@ -107,6 +108,7 @@ def _build_point(
             "h3": chunk.get("h3"),
             "forward_links": chunk.get("forward_links", []),
             "chunk_index": chunk.get("chunk_index"),
+            "is_title_chunk": chunk.get("chunk_index", 0) == 0,
             "doc_hash": doc["doc_hash"],
             "text": chunk.get("text", ""),
         },
@@ -120,7 +122,7 @@ def _build_point(
 
 def upsert_chunks(
     client: "QdrantClient",
-    ollama_embedder: OllamaEmbedder,
+    dense_embedder: DenseEmbedder,
     bm25_embedder: BM25Embedder,
     doc: dict,
     chunks: list[dict],
@@ -131,7 +133,7 @@ def upsert_chunks(
 
     Args:
         client: Connected QdrantClient instance.
-        ollama_embedder: Dense embedding model.
+        dense_embedder: Dense embedding model.
         bm25_embedder: Sparse BM25 embedding model.
         doc: Scanner record (file_path, content, tags, type, status, doc_hash, ...).
         chunks: Chunker records (text, h1, h2, h3, forward_links, chunk_index).
@@ -144,7 +146,7 @@ def upsert_chunks(
 
     points: list[PointStruct] = []
     for chunk in chunks:
-        dense = ollama_embedder.embed(chunk["text"])
+        dense = dense_embedder.embed(chunk["text"])
         sparse = bm25_embedder.embed(chunk["text"])
         point = _build_point(doc, chunk, dense, sparse, modified_at)
         points.append(point)
