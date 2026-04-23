@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from vault_qdrant.mcp_server import _format_hit, vault_ask, vault_related_notes, vault_search, vault_search_documents
+from vault_qdrant.mcp_server import _format_hit, vault_ask, vault_related_notes, vault_search, vault_search_documents, vault_stats as _vault_stats
 
 
 def _make_hit(payload: dict, score: float = 0.75) -> MagicMock:
@@ -252,3 +252,34 @@ def test_vault_related_notes_returns_empty_when_no_title_chunk():
         results = vault_related_notes("nonexistent.md")
 
     assert results == []
+
+
+def test_vault_stats_includes_quality_section():
+    """vault_stats() must return a 'quality' dict with required keys."""
+    payloads = [
+        {"doc_type": "session", "tags": ["a"], "type_source": "frontmatter", "file_path": "s1.md", "chunk_index": 0},
+        {"doc_type": "note", "tags": [], "type_source": "inferred", "file_path": "n1.md", "chunk_index": 0},
+        {"doc_type": "note", "tags": [], "type_source": "inferred", "file_path": "n1.md", "chunk_index": 1},
+    ]
+    points = [MagicMock(payload=p) for p in payloads]
+
+    mock_info = MagicMock()
+    mock_info.points_count = 3
+
+    with patch("vault_qdrant.mcp_server._get_client") as mock_client_fn:
+        mock_client = MagicMock()
+        mock_client.get_collection.return_value = mock_info
+        mock_client.scroll.return_value = (points, None)
+        mock_client_fn.return_value = mock_client
+
+        result = _vault_stats()
+
+    assert "quality" in result
+    q = result["quality"]
+    assert "notes_without_type" in q
+    assert "notes_without_tags" in q
+    assert "inferred_type_count" in q
+    assert "avg_chunks_per_doc" in q
+    assert q["avg_chunks_per_doc"] == 1.5   # s1.md=1 chunk, n1.md=2 chunks
+    assert q["inferred_type_count"] == 1    # n1.md has type_source=inferred
+    assert q["notes_without_tags"] == 1     # n1.md has empty tags

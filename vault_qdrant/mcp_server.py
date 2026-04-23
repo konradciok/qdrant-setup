@@ -615,10 +615,10 @@ def vault_related_notes(file_path: str, limit: int = 10) -> list[dict]:
 
 @mcp.tool()
 def vault_stats() -> dict:
-    """Return a summary of the vault collection: total chunks, doc_type breakdown, top tags.
+    """Return a summary of the vault collection: total chunks, doc_type breakdown, top tags, quality metrics.
 
-    Use when the user asks about the size or composition of their vault index,
-    or to understand what kinds of notes are indexed before doing a search.
+    The 'quality' section shows vault metadata health: notes missing frontmatter type,
+    notes with no tags, inferred vs explicit type counts, and average chunks per document.
     """
     client = _get_client()
 
@@ -627,6 +627,10 @@ def vault_stats() -> dict:
 
     doc_type_counts: dict[str, int] = {}
     tag_counts: dict[str, int] = {}
+    doc_tags: dict[str, list] = {}
+    doc_type_source: dict[str, str] = {}
+    doc_has_type: dict[str, bool] = {}
+    chunk_counts: dict[str, int] = {}
     offset = None
 
     while True:
@@ -643,10 +647,21 @@ def vault_stats() -> dict:
             doc_type_counts[dt] = doc_type_counts.get(dt, 0) + 1
             for tag in payload.get("tags") or []:
                 tag_counts[tag] = tag_counts.get(tag, 0) + 1
+
+            fp = payload.get("file_path")
+            if fp:
+                chunk_counts[fp] = chunk_counts.get(fp, 0) + 1
+                if fp not in doc_tags:
+                    doc_tags[fp] = payload.get("tags") or []
+                    doc_type_source[fp] = payload.get("type_source", "inferred")
+                    doc_has_type[fp] = payload.get("doc_type") is not None
+
         if offset is None:
             break
 
     top_tags = sorted(tag_counts.items(), key=lambda x: x[1], reverse=True)[:20]
+    unique_docs = len(chunk_counts)
+    avg_chunks = round(total_points / unique_docs, 2) if unique_docs else 0.0
 
     return {
         "total_chunks": total_points,
@@ -654,6 +669,12 @@ def vault_stats() -> dict:
             sorted(doc_type_counts.items(), key=lambda x: x[1], reverse=True)
         ),
         "top_tags": [{"tag": t, "count": c} for t, c in top_tags],
+        "quality": {
+            "notes_without_type": sum(1 for has_type in doc_has_type.values() if not has_type),
+            "notes_without_tags": sum(1 for tags in doc_tags.values() if not tags),
+            "inferred_type_count": sum(1 for src in doc_type_source.values() if src == "inferred"),
+            "avg_chunks_per_doc": avg_chunks,
+        },
     }
 
 
