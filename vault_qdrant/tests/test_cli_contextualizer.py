@@ -148,7 +148,7 @@ def test_cli_sync_force_flag_parsed() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         with patch("vault_qdrant.cli._load_env"), \
              patch("vault_qdrant.cli._make_client", return_value=MagicMock()), \
-             patch("vault_qdrant.cli._make_ollama", return_value=MagicMock()), \
+             patch("vault_qdrant.cli._make_dense_embedder", return_value=MagicMock()), \
              patch("vault_qdrant.cli.BM25Embedder", return_value=MagicMock()), \
              patch("vault_qdrant.cli._make_contextualizer", return_value=MagicMock()), \
              patch("vault_qdrant.cli.ensure_vault_collection"), \
@@ -167,7 +167,7 @@ def test_cli_sync_without_force_flag() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         with patch("vault_qdrant.cli._load_env"), \
              patch("vault_qdrant.cli._make_client", return_value=MagicMock()), \
-             patch("vault_qdrant.cli._make_ollama", return_value=MagicMock()), \
+             patch("vault_qdrant.cli._make_dense_embedder", return_value=MagicMock()), \
              patch("vault_qdrant.cli.BM25Embedder", return_value=MagicMock()), \
              patch("vault_qdrant.cli._make_contextualizer", return_value=MagicMock()), \
              patch("vault_qdrant.cli.ensure_vault_collection"), \
@@ -186,11 +186,11 @@ def test_cli_search_no_results() -> None:
     runner = CliRunner()
     with patch("vault_qdrant.cli._load_env"), \
          patch("vault_qdrant.cli._make_client") as MockClient, \
-         patch("vault_qdrant.cli._make_ollama") as MockOllama, \
+         patch("vault_qdrant.cli._make_dense_embedder") as MockDense, \
          patch("vault_qdrant.cli.BM25Embedder") as MockBM25:
-        mock_ollama_inst = MagicMock()
-        mock_ollama_inst.embed.return_value = [0.1] * 384
-        MockOllama.return_value = mock_ollama_inst
+        mock_dense_inst = MagicMock()
+        mock_dense_inst.embed.return_value = [0.1] * 384
+        MockDense.return_value = mock_dense_inst
 
         mock_bm25_inst = MagicMock()
         mock_bm25_inst.embed.return_value = SparseVector(indices=[], values=[])

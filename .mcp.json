@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "vault": {
+      "command": "uv",
+      "args": ["run", "python", "-m", "vault_qdrant.mcp_server"],
+      "cwd": "/Users/konradciok/repositories/medusa/qdrant",
+      "env": {
+        "QDRANT_HTTP_PORT": "6333"
+      }
+    }
+  }
+}

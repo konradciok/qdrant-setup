@@ -1,11 +1,3 @@
 {
-  "mcpServers": {
-    "qdrant": {
-      "command": "uvx",
-      "args": ["mcp-server-qdrant"],
-      "env": {
-        "QDRANT_URL": "http://localhost:6333"
-      }
-    }
-  }
+  "mcpServers": {}
 }

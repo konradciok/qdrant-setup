@@ -21,7 +21,7 @@ from qdrant_client.models import Fusion, FusionQuery, Prefetch
 from vault_qdrant.chunker import chunk
 from vault_qdrant.collection import VAULT_COLLECTION, ensure_vault_collection
 from vault_qdrant.contextualizer import Contextualizer
-from vault_qdrant.embedder import BM25Embedder, OllamaEmbedder
+from vault_qdrant.embedder import BM25Embedder, DenseEmbedder
 from vault_qdrant.scanner import scan
 from vault_qdrant.upserter import _existing_doc_hash, delete_orphans, upsert_chunks
 
@@ -68,10 +68,8 @@ def _make_client() -> QdrantClient:
     return QdrantClient(host="localhost", port=port)
 
 
-def _make_ollama() -> OllamaEmbedder:
-    base_url = _require_env("OLLAMA_BASE_URL")
-    model = _require_env("OLLAMA_EMBED_MODEL")
-    return OllamaEmbedder(base_url=base_url, model=model)
+def _make_dense_embedder() -> DenseEmbedder:
+    return DenseEmbedder()
 
 
 def _make_contextualizer() -> Contextualizer:
@@ -99,7 +97,7 @@ def _contextualize_chunks(
 
 def _sync_doc(
     client: QdrantClient,
-    ollama: OllamaEmbedder,
+    dense: DenseEmbedder,
     bm25: BM25Embedder,
     contextualizer: Contextualizer | None,
     doc: dict,
@@ -115,7 +113,7 @@ def _sync_doc(
         if contextualizer is not None
         else raw_chunks
     )
-    upsert_chunks(client, ollama, bm25, effective_doc, ctx_chunks)
+    upsert_chunks(client, dense, bm25, effective_doc, ctx_chunks)
     return len(ctx_chunks)
 
 
@@ -142,7 +140,7 @@ def sync(vault: str, force: bool, no_context: bool) -> None:
     """Scan vault, chunk docs, contextualize, and upsert into Qdrant."""
     _load_env()
     client = _make_client()
-    ollama = _make_ollama()
+    dense = _make_dense_embedder()
     bm25 = BM25Embedder()
     contextualizer = None if no_context else _make_contextualizer()
 
@@ -153,7 +151,7 @@ def sync(vault: str, force: bool, no_context: bool) -> None:
 
     total_chunks = 0
     for doc in docs:
-        n = _sync_doc(client, ollama, bm25, contextualizer, doc, force)
+        n = _sync_doc(client, dense, bm25, contextualizer, doc, force)
         total_chunks += n
 
     orphans = delete_orphans(client, {d["file_path"] for d in docs})
@@ -197,11 +195,11 @@ def _dense_size(vectors_config: Any) -> str:
     """Extract dense vector dimension from vectors config."""
     if hasattr(vectors_config, "__getitem__"):
         try:
-            return str(vectors_config["dense"].size)
+            return str(vectors_config["fast-bge-large-en-v1.5"].size)
         except (KeyError, TypeError, AttributeError):
             pass
-    if hasattr(vectors_config, "dense"):
-        return str(vectors_config.dense.size)
+    if hasattr(vectors_config, "fast-bge-large-en-v1.5"):
+        return str(getattr(vectors_config, "fast-bge-large-en-v1.5").size)
     return "unknown"
 
 
@@ -225,16 +223,16 @@ def search(query: str) -> None:
     """Hybrid semantic + BM25 search with server-side RRF fusion."""
     _load_env()
     client = _make_client()
-    ollama = _make_ollama()
+    dense = _make_dense_embedder()
     bm25 = BM25Embedder()
 
-    dense_vec = ollama.embed(query)
+    dense_vec = dense.embed(query)
     sparse_vec = bm25.embed(query)
 
     hits = client.query_points(
         collection_name=VAULT_COLLECTION,
         prefetch=[
-            Prefetch(query=dense_vec, using="dense", limit=20),
+            Prefetch(query=dense_vec, using="fast-bge-large-en-v1.5", limit=20),
             Prefetch(query=sparse_vec, using="sparse", limit=20),
         ],
         query=FusionQuery(fusion=Fusion.RRF),

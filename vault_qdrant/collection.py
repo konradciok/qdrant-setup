@@ -20,7 +20,7 @@ def ensure_vault_collection(client: QdrantClient) -> None:
     """Create the vault collection if it doesn't exist.
 
     Creates a hybrid search-enabled collection with:
-    - Dense vector (2560 dim, cosine distance)
+    - Dense vector (1024 dim, cosine distance)
     - Sparse vector (BM25 index)
     - Payload indexes for filtering (doc_type, tags, folder, modified_at, status)
     - HNSW config: m=16, ef_construct=200
@@ -43,7 +43,7 @@ def ensure_vault_collection(client: QdrantClient) -> None:
     client.create_collection(
         collection_name=VAULT_COLLECTION,
         vectors_config={
-            "dense": VectorParams(size=2560, distance=Distance.COSINE, on_disk=False),
+            "fast-bge-large-en-v1.5": VectorParams(size=1024, distance=Distance.COSINE, on_disk=False),
         },
         sparse_vectors_config={
             "sparse": SparseVectorParams(index=SparseIndexParams(on_disk=False))

@@ -75,8 +75,8 @@ def test_upsert_search_roundtrip():
     # No existing doc hash — scroll returns empty
     mock_client.scroll.return_value = ([], None)
 
-    mock_ollama = MagicMock()
-    mock_ollama.embed.return_value = [0.1] * 2560
+    mock_dense = MagicMock()
+    mock_dense.embed.return_value = [0.1] * 1024
 
     mock_bm25 = MagicMock()
     mock_bm25.embed.return_value = SparseVector(indices=[0, 1], values=[0.8, 0.4])
@@ -103,7 +103,7 @@ def test_upsert_search_roundtrip():
         }
     ]
 
-    upsert_chunks(mock_client, mock_ollama, mock_bm25, doc, chunks)
+    upsert_chunks(mock_client, mock_dense, mock_bm25, doc, chunks)
 
     # client.upsert must have been called exactly once
     mock_client.upsert.assert_called_once()
@@ -159,7 +159,7 @@ def test_metadata_filter_narrows_results():
     # Unfiltered search returns both hits
     all_results = mock_client.search(
         collection_name="vault",
-        query_vector=("dense", [0.0] * 2560),
+        query_vector=("fast-bge-large-en-v1.5", [0.0] * 1024),
         limit=10,
     )
     assert len(all_results) == 2
@@ -167,7 +167,7 @@ def test_metadata_filter_narrows_results():
     # Filtered search returns only the spec hit
     filtered_results = mock_client.search(
         collection_name="vault",
-        query_vector=("dense", [0.0] * 2560),
+        query_vector=("fast-bge-large-en-v1.5", [0.0] * 1024),
         limit=10,
         query_filter=spec_filter,
     )

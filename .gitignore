@@ -7,3 +7,7 @@ htmlcov/
 dist/
 *.egg-info/
 .venv/
+.serena/
+.claude/skills/
+storage/collections/
+qdrant.md
