@@ -548,6 +548,72 @@ def vault_ask(
 
 
 @mcp.tool()
+def vault_related_notes(file_path: str, limit: int = 10) -> list[dict]:
+    """Find vault notes that are semantically similar to the given file.
+
+    Uses the stored dense vector of the file's first chunk (chunk_index=0) to
+    find similar documents — no re-embedding needed.
+
+    Example: vault_related_notes("projects/medusa/deployment/phase-0.md")
+    Returns notes about deployment, infrastructure, or related planning topics.
+    """
+    client = _get_client()
+
+    title_points, _ = client.scroll(
+        collection_name=VAULT_COLLECTION,
+        scroll_filter=Filter(
+            must=[
+                FieldCondition(key="file_path", match=MatchValue(value=file_path)),
+                FieldCondition(key="chunk_index", match=MatchValue(value=0)),
+            ]
+        ),
+        limit=1,
+        with_payload=True,
+        with_vectors=False,
+    )
+
+    if not title_points:
+        return []
+
+    title_point_id = title_points[0].id
+
+    hits = client.query_points(
+        collection_name=VAULT_COLLECTION,
+        query=title_point_id,
+        using=DENSE_FIELD,
+        limit=limit * 5,
+        query_filter=Filter(
+            must_not=[FieldCondition(key="file_path", match=MatchValue(value=file_path))]
+        ),
+        with_payload=True,
+    ).points
+
+    best: dict[str, Any] = {}
+    for hit in hits:
+        p = hit.payload or {}
+        fp = p.get("file_path")
+        if not fp or fp == file_path:
+            continue
+        if fp not in best or hit.score > best[fp].score:
+            best[fp] = hit
+
+    ranked = sorted(best.values(), key=lambda h: h.score, reverse=True)[:limit]
+
+    return [
+        {
+            "file_path": (h.payload or {}).get("file_path"),
+            "score": round(h.score, 4),
+            "doc_type": (h.payload or {}).get("doc_type"),
+            "h1": (h.payload or {}).get("h1"),
+            "tags": (h.payload or {}).get("tags", []),
+            "status": (h.payload or {}).get("status"),
+            "modified_at": (h.payload or {}).get("modified_at"),
+        }
+        for h in ranked
+    ]
+
+
+@mcp.tool()
 def vault_stats() -> dict:
     """Return a summary of the vault collection: total chunks, doc_type breakdown, top tags.
 

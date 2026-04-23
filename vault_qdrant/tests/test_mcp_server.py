@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from vault_qdrant.mcp_server import _format_hit, vault_ask, vault_search, vault_search_documents
+from vault_qdrant.mcp_server import _format_hit, vault_ask, vault_related_notes, vault_search, vault_search_documents
 
 
 def _make_hit(payload: dict, score: float = 0.75) -> MagicMock:
@@ -210,3 +210,45 @@ def test_vault_ask_deduplicates_sources():
     file_paths = [s["file_path"] for s in result["sources"]]
     assert file_paths.count("a.md") == 1, "a.md must appear only once in sources"
     assert "b.md" in file_paths
+
+
+def test_vault_related_notes_excludes_source_file():
+    """Results must not include chunks from the queried file itself."""
+    title_point = MagicMock()
+    title_point.id = "abc123"
+    title_point.payload = {"file_path": "source.md", "chunk_index": 0}
+
+    hit_same = MagicMock()
+    hit_same.score = 0.99
+    hit_same.payload = {"file_path": "source.md", "doc_type": "note", "tags": [], "h1": "S", "status": None, "modified_at": None}
+
+    hit_other = MagicMock()
+    hit_other.score = 0.85
+    hit_other.payload = {"file_path": "other.md", "doc_type": "note", "tags": [], "h1": "O", "status": None, "modified_at": None}
+
+    mock_qp_result = MagicMock()
+    mock_qp_result.points = [hit_same, hit_other]
+
+    with patch("vault_qdrant.mcp_server._get_client") as mock_client_fn:
+        mock_client = MagicMock()
+        mock_client.scroll.return_value = ([title_point], None)
+        mock_client.query_points.return_value = mock_qp_result
+        mock_client_fn.return_value = mock_client
+
+        results = vault_related_notes("source.md", limit=5)
+
+    file_paths = [r["file_path"] for r in results]
+    assert "source.md" not in file_paths
+    assert "other.md" in file_paths
+
+
+def test_vault_related_notes_returns_empty_when_no_title_chunk():
+    """Return empty list gracefully when file has no indexed chunks."""
+    with patch("vault_qdrant.mcp_server._get_client") as mock_client_fn:
+        mock_client = MagicMock()
+        mock_client.scroll.return_value = ([], None)
+        mock_client_fn.return_value = mock_client
+
+        results = vault_related_notes("nonexistent.md")
+
+    assert results == []
