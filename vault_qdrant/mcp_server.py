@@ -21,6 +21,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
+    DatetimeRange,
     FieldCondition,
     Filter,
     Fusion,
@@ -29,7 +30,6 @@ from qdrant_client.models import (
     MatchValue,
     OrderBy,
     Prefetch,
-    Range,
 )
 
 from vault_qdrant.collection import VAULT_COLLECTION
@@ -105,12 +105,15 @@ def _build_filter(
     if status:
         must.append(FieldCondition(key="status", match=MatchValue(value=status)))
     if modified_after or modified_before:
-        range_params: dict[str, Any] = {}
-        if modified_after:
-            range_params["gte"] = modified_after
-        if modified_before:
-            range_params["lte"] = modified_before
-        must.append(FieldCondition(key="modified_at", range=Range(**range_params)))
+        must.append(
+            FieldCondition(
+                key="modified_at",
+                range=DatetimeRange(
+                    gte=modified_after,
+                    lte=modified_before,
+                ),
+            )
+        )
     return Filter(must=must) if must else None
 
 
