@@ -16,6 +16,7 @@ from typing import Any
 import click
 from dotenv import load_dotenv
 from qdrant_client import QdrantClient
+from qdrant_client.models import Fusion, FusionQuery, Prefetch
 
 from vault_qdrant.chunker import chunk
 from vault_qdrant.collection import VAULT_COLLECTION, ensure_vault_collection
@@ -79,21 +80,6 @@ def _make_contextualizer() -> Contextualizer:
 
 
 # ---------------------------------------------------------------------------
-# RRF
-# ---------------------------------------------------------------------------
-
-
-def _rrf(dense_hits: list[Any], sparse_hits: list[Any], k: int = 60) -> list[tuple[Any, float]]:
-    """Reciprocal Rank Fusion of two hit lists. Returns top-5 (id, score) pairs."""
-    scores: dict[Any, float] = {}
-    for rank, hit in enumerate(dense_hits):
-        scores[hit.id] = scores.get(hit.id, 0.0) + 1 / (k + rank + 1)
-    for rank, hit in enumerate(sparse_hits):
-        scores[hit.id] = scores.get(hit.id, 0.0) + 1 / (k + rank + 1)
-    return sorted(scores.items(), key=lambda x: -x[1])[:5]
-
-
-# ---------------------------------------------------------------------------
 # Sync pipeline helpers
 # ---------------------------------------------------------------------------
 
@@ -115,16 +101,20 @@ def _sync_doc(
     client: QdrantClient,
     ollama: OllamaEmbedder,
     bm25: BM25Embedder,
-    contextualizer: Contextualizer,
+    contextualizer: Contextualizer | None,
     doc: dict,
     force: bool,
 ) -> int:
-    """Chunk, contextualize, and upsert a single doc. Returns number of chunks upserted."""
+    """Chunk, contextualize (if contextualizer provided), and upsert a single doc."""
     if not force and _existing_doc_hash(client, doc["file_path"]) == doc["doc_hash"]:
         return 0
     effective_doc = {**doc, "doc_hash": ""} if force else doc
     raw_chunks = chunk(doc["content"], doc.get("type"))
-    ctx_chunks = _contextualize_chunks(contextualizer, doc["content"], raw_chunks)
+    ctx_chunks = (
+        _contextualize_chunks(contextualizer, doc["content"], raw_chunks)
+        if contextualizer is not None
+        else raw_chunks
+    )
     upsert_chunks(client, ollama, bm25, effective_doc, ctx_chunks)
     return len(ctx_chunks)
 
@@ -147,13 +137,14 @@ def main() -> None:
 @main.command()
 @click.option("--vault", required=True, type=click.Path(exists=True), help="Path to Obsidian vault")
 @click.option("--force", is_flag=True, default=False, help="Re-upsert even if doc_hash unchanged")
-def sync(vault: str, force: bool) -> None:
+@click.option("--no-context", "no_context", is_flag=True, default=False, help="Skip Anthropic contextualisation")
+def sync(vault: str, force: bool, no_context: bool) -> None:
     """Scan vault, chunk docs, contextualize, and upsert into Qdrant."""
     _load_env()
     client = _make_client()
     ollama = _make_ollama()
     bm25 = BM25Embedder()
-    contextualizer = _make_contextualizer()
+    contextualizer = None if no_context else _make_contextualizer()
 
     ensure_vault_collection(client)
 
@@ -231,7 +222,7 @@ def _sparse_info(sparse_config: Any) -> str:
 @main.command()
 @click.argument("query")
 def search(query: str) -> None:
-    """Hybrid semantic + BM25 search with RRF fusion."""
+    """Hybrid semantic + BM25 search with server-side RRF fusion."""
     _load_env()
     client = _make_client()
     ollama = _make_ollama()
@@ -240,34 +231,25 @@ def search(query: str) -> None:
     dense_vec = ollama.embed(query)
     sparse_vec = bm25.embed(query)
 
-    dense_hits = client.search(
+    hits = client.query_points(
         collection_name=VAULT_COLLECTION,
-        query_vector=("dense", dense_vec),
-        limit=20,
+        prefetch=[
+            Prefetch(query=dense_vec, using="dense", limit=20),
+            Prefetch(query=sparse_vec, using="sparse", limit=20),
+        ],
+        query=FusionQuery(fusion=Fusion.RRF),
+        limit=5,
         with_payload=True,
-    )
-    sparse_hits = client.search(
-        collection_name=VAULT_COLLECTION,
-        query_vector=("sparse", sparse_vec),
-        limit=20,
-        with_payload=True,
-    )
+    ).points
 
-    # Build id → hit lookup from both lists for payload retrieval after RRF
-    all_hits: dict[Any, Any] = {h.id: h for h in dense_hits}
-    all_hits.update({h.id: h for h in sparse_hits})
-
-    merged = _rrf(dense_hits, sparse_hits)
-
-    if not merged:
+    if not hits:
         click.echo("No results found.")
         return
 
-    for rank, (hit_id, score) in enumerate(merged, start=1):
-        hit = all_hits[hit_id]
+    for rank, hit in enumerate(hits, start=1):
         payload = hit.payload or {}
         text_preview = (payload.get("text") or "")[:200]
         click.echo(
-            f"[{rank}] score={score:.4f}  {payload.get('file_path', '')}  "
+            f"[{rank}] score={hit.score:.4f}  {payload.get('file_path', '')}  "
             f"h2={payload.get('h2', '')}  {text_preview!r}"
         )

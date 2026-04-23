@@ -1,52 +1,46 @@
 """Embedding models for vault chunks.
 
 Provides two embedders:
-- OllamaEmbedder: Dense embeddings (2560-dim) via Ollama API
+- DenseEmbedder: Dense embeddings (1024-dim) via fastembed
 - BM25Embedder: Sparse embeddings via fastembed
 """
 
 from __future__ import annotations
 
-import requests
 from qdrant_client.models import SparseVector
 
+DENSE_MODEL = "BAAI/bge-large-en-v1.5"
+SPARSE_MODEL = "Qdrant/bm25"
 
-class OllamaEmbedder:
-    """Embed text using Ollama's embedding API.
 
-    Calls POST {base_url}/api/embed with model and text.
-    Returns dense vector (typically 2560-dim for qwen3-embedding:4b).
-    """
+class DenseEmbedder:
+    """Dense text embeddings via fastembed (BAAI/bge-large-en-v1.5, 1024-dim)."""
 
-    def __init__(self, base_url: str, model: str) -> None:
-        """Initialize Ollama embedder.
+    def __init__(self) -> None:
+        self._model = None
 
-        Args:
-            base_url: Ollama API base URL (e.g. "http://localhost:11434")
-            model: Model name (e.g. "qwen3-embedding:4b")
-        """
-        self.base_url = base_url
-        self.model = model
+    def _ensure_model(self) -> None:
+        if self._model is None:
+            try:
+                from fastembed import TextEmbedding
+            except ImportError as exc:
+                raise ImportError(
+                    "fastembed not installed. Install with: pip install fastembed"
+                ) from exc
+            self._model = TextEmbedding(model_name=DENSE_MODEL)
 
     def embed(self, text: str) -> list[float]:
-        """Embed text into a dense vector.
+        """Embed text into a 1024-dim dense vector.
 
         Args:
             text: Text to embed
 
         Returns:
-            Dense vector as list of floats (2560-dim)
-
-        Raises:
-            requests.RequestException: If API call fails
+            Dense vector as list of floats (1024-dim)
         """
-        response = requests.post(
-            f"{self.base_url}/api/embed",
-            json={"model": self.model, "input": text},
-            timeout=60,
-        )
-        response.raise_for_status()
-        return response.json()["embeddings"][0]
+        self._ensure_model()
+        embeddings = list(self._model.embed([text]))
+        return embeddings[0].tolist()
 
 
 class BM25Embedder:
@@ -87,3 +81,42 @@ class BM25Embedder:
         embeddings = list(self._model.embed([text]))
         sparse_embedding = embeddings[0]
         return SparseVector(indices=sparse_embedding.indices, values=sparse_embedding.values)
+
+
+CROSS_ENCODER_MODEL = "BAAI/bge-reranker-v2-m3"
+
+
+class CrossEncoderReranker:
+    """Cross-encoder reranker using sentence-transformers.
+
+    Reranks a list of hit dicts by (query, text) cross-encoder score.
+    Model is lazy-loaded on first call and cached for the session.
+    """
+
+    def __init__(self) -> None:
+        self._model = None
+
+    def _load_model(self) -> "CrossEncoder":
+        try:
+            from sentence_transformers import CrossEncoder
+        except ImportError as exc:
+            raise ImportError(
+                "sentence-transformers not installed. Run: uv sync"
+            ) from exc
+        return CrossEncoder(CROSS_ENCODER_MODEL)
+
+    def rerank(self, query: str, hits: list[dict]) -> list[dict]:
+        """Return hits re-sorted by cross-encoder relevance score (descending).
+
+        Args:
+            query: The search query string.
+            hits: List of hit dicts, each with a "text" key.
+
+        Returns:
+            Same hits sorted by cross-encoder score, highest first.
+        """
+        if self._model is None:
+            self._model = self._load_model()
+        pairs = [(query, h.get("text", "")) for h in hits]
+        scores = self._model.predict(pairs)
+        return [h for _, h in sorted(zip(scores, hits), key=lambda x: x[0], reverse=True)]

@@ -16,10 +16,13 @@ dependencies = [
     "python-dotenv>=1.0",
     "pyyaml>=6",
     "qdrant-client>=1.9",
+    "mcp[cli]>=1.6",
+    "sentence-transformers>=3.0",
 ]
 
 [project.scripts]
 vault-qdrant = "vault_qdrant.cli:main"
+vault-mcp = "vault_qdrant.mcp_server:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

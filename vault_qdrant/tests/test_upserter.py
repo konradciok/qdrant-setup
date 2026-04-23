@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 from qdrant_client.models import SparseVector
 
-from vault_qdrant.upserter import delete_orphans, upsert_chunks
+from vault_qdrant.upserter import _chunk_id, delete_orphans, upsert_chunks
 
 
 # ---------------------------------------------------------------------------
@@ -66,10 +66,10 @@ def mock_client() -> MagicMock:
 
 
 @pytest.fixture()
-def mock_ollama_embedder() -> MagicMock:
-    """OllamaEmbedder mock returning a 2560-dim dense vector."""
+def mock_dense_embedder() -> MagicMock:
+    """DenseEmbedder mock returning a 1024-dim dense vector."""
     embedder = MagicMock()
-    embedder.embed.return_value = [0.1] * 2560
+    embedder.embed.return_value = [0.1] * 1024
     return embedder
 
 
@@ -86,9 +86,9 @@ def mock_bm25_embedder() -> MagicMock:
 # ---------------------------------------------------------------------------
 
 
-def _expected_id(file_path: str, h2: str | None, h3: str | None = None) -> str:
-    """Deterministic chunk ID as first-32-chars of SHA-256(file_path + h2 + h3)."""
-    raw = (file_path + (h2 or "") + (h3 or "")).encode()
+def _expected_id(file_path: str, h2: str | None, h3: str | None, chunk_index: int = 0) -> str:
+    """Deterministic chunk ID as first-32-chars of SHA-256(file_path + h2 + h3 + chunk_index)."""
+    raw = (file_path + (h2 or "") + (h3 or "") + str(chunk_index)).encode()
     return hashlib.sha256(raw).hexdigest()[:32]
 
 
@@ -98,11 +98,11 @@ def _expected_id(file_path: str, h2: str | None, h3: str | None = None) -> str:
 
 
 def test_upsert_calls_upsert_points(
-    mock_client, mock_ollama_embedder, mock_bm25_embedder, sample_doc, sample_chunks
+    mock_client, mock_dense_embedder, mock_bm25_embedder, sample_doc, sample_chunks
 ):
     """upsert_chunks() must call client.upsert() with the vault collection name."""
     upsert_chunks(
-        mock_client, mock_ollama_embedder, mock_bm25_embedder, sample_doc, sample_chunks
+        mock_client, mock_dense_embedder, mock_bm25_embedder, sample_doc, sample_chunks
     )
 
     assert mock_client.upsert.called, "client.upsert() was never called"
@@ -121,11 +121,11 @@ def test_upsert_calls_upsert_points(
 
 
 def test_upsert_payload_fields(
-    mock_client, mock_ollama_embedder, mock_bm25_embedder, sample_doc, sample_chunks
+    mock_client, mock_dense_embedder, mock_bm25_embedder, sample_doc, sample_chunks
 ):
     """Each upserted point must carry the required payload fields."""
     upsert_chunks(
-        mock_client, mock_ollama_embedder, mock_bm25_embedder, sample_doc, sample_chunks
+        mock_client, mock_dense_embedder, mock_bm25_embedder, sample_doc, sample_chunks
     )
 
     assert mock_client.upsert.called
@@ -159,11 +159,11 @@ def test_upsert_payload_fields(
 
 
 def test_upsert_has_dense_and_sparse_vectors(
-    mock_client, mock_ollama_embedder, mock_bm25_embedder, sample_doc, sample_chunks
+    mock_client, mock_dense_embedder, mock_bm25_embedder, sample_doc, sample_chunks
 ):
     """Each upserted point must have a 'dense' named vector and a 'sparse' sparse vector."""
     upsert_chunks(
-        mock_client, mock_ollama_embedder, mock_bm25_embedder, sample_doc, sample_chunks
+        mock_client, mock_dense_embedder, mock_bm25_embedder, sample_doc, sample_chunks
     )
 
     upsert_call = mock_client.upsert.call_args
@@ -172,7 +172,7 @@ def test_upsert_has_dense_and_sparse_vectors(
     assert points
     for point in points:
         vectors = point.vector
-        assert "dense" in vectors, "Missing 'dense' vector"
+        assert "fast-bge-large-en-v1.5" in vectors, "Missing 'fast-bge-large-en-v1.5' vector"
         assert "sparse" in vectors, "Missing 'sparse' vector"
 
 
@@ -182,18 +182,18 @@ def test_upsert_has_dense_and_sparse_vectors(
 
 
 def test_chunk_id_is_sha256_of_file_path_and_h2(
-    mock_client, mock_ollama_embedder, mock_bm25_embedder, sample_doc, sample_chunks
+    mock_client, mock_dense_embedder, mock_bm25_embedder, sample_doc, sample_chunks
 ):
     """Point IDs must be deterministic SHA-256 hashes of file_path + h2 + h3."""
     upsert_chunks(
-        mock_client, mock_ollama_embedder, mock_bm25_embedder, sample_doc, sample_chunks
+        mock_client, mock_dense_embedder, mock_bm25_embedder, sample_doc, sample_chunks
     )
 
     upsert_call = mock_client.upsert.call_args
     points = upsert_call.kwargs.get("points") or upsert_call.args[1]
 
     for point, chunk in zip(points, sample_chunks):
-        expected = _expected_id(sample_doc["file_path"], chunk["h2"], chunk.get("h3"))
+        expected = _expected_id(sample_doc["file_path"], chunk["h2"], chunk.get("h3"), chunk.get("chunk_index", 0))
         assert point.id == expected, (
             f"Expected ID {expected!r}, got {point.id!r} for h2={chunk['h2']!r} h3={chunk.get('h3')!r}"
         )
@@ -212,7 +212,7 @@ def test_chunk_id_is_sha256_of_file_path_and_h2(
 
 
 def test_skip_unchanged_doc_hash(
-    mock_client, mock_ollama_embedder, mock_bm25_embedder, sample_doc, sample_chunks
+    mock_client, mock_dense_embedder, mock_bm25_embedder, sample_doc, sample_chunks
 ):
     """If existing Qdrant point has the same doc_hash, upsert must be skipped."""
     existing_point = MagicMock()
@@ -220,7 +220,7 @@ def test_skip_unchanged_doc_hash(
     mock_client.scroll.return_value = ([existing_point], None)
 
     upsert_chunks(
-        mock_client, mock_ollama_embedder, mock_bm25_embedder, sample_doc, sample_chunks
+        mock_client, mock_dense_embedder, mock_bm25_embedder, sample_doc, sample_chunks
     )
 
     mock_client.upsert.assert_not_called()
@@ -274,3 +274,59 @@ def test_delete_orphan_points(mock_client):
     assert "id-orphan-1" in deleted_ids
     assert "id-orphan-2" in deleted_ids
     assert "id-active-1" not in deleted_ids
+
+
+def test_duplicate_headings_different_chunk_index_no_collision() -> None:
+    """Two chunks with identical h2/h3 but different chunk_index must produce different IDs."""
+    id_first = _chunk_id("notes.md", "Notes", None, 0)
+    id_second = _chunk_id("notes.md", "Notes", None, 1)
+    assert id_first != id_second, (
+        "Chunks with duplicate headings but different chunk_index must not collide"
+    )
+
+
+def test_chunk_id_includes_chunk_index() -> None:
+    """chunk_index alone must change the resulting ID."""
+    id_zero = _chunk_id("file.md", "Section", "Sub", 0)
+    id_one = _chunk_id("file.md", "Section", "Sub", 1)
+    assert id_zero != id_one
+
+
+def test_first_chunk_is_title_chunk(
+    mock_client, mock_dense_embedder, mock_bm25_embedder, sample_doc, sample_chunks
+):
+    """chunk_index=0 must have is_title_chunk=True in payload."""
+    upsert_chunks(
+        mock_client, mock_dense_embedder, mock_bm25_embedder, sample_doc, sample_chunks
+    )
+    points = mock_client.upsert.call_args.kwargs.get("points") or \
+             mock_client.upsert.call_args.args[1]
+
+    title_chunk = next(p for p in points if p.payload.get("chunk_index") == 0)
+    other_chunk = next(p for p in points if p.payload.get("chunk_index") == 1)
+
+    assert title_chunk.payload["is_title_chunk"] is True
+    assert other_chunk.payload["is_title_chunk"] is False
+
+
+def test_type_source_propagated_to_payload(
+    mock_client, mock_dense_embedder, mock_bm25_embedder, sample_chunks
+):
+    """type_source from doc must appear in every chunk payload."""
+    doc = {
+        "file_path": "projects/alpha.md",
+        "content": "content",
+        "tags": [],
+        "type": "project",
+        "type_source": "inferred",
+        "created": None,
+        "status": None,
+        "projects": [],
+        "doc_hash": "xyzabc",
+    }
+    upsert_chunks(mock_client, mock_dense_embedder, mock_bm25_embedder, doc, sample_chunks)
+    points = mock_client.upsert.call_args.kwargs.get("points") or \
+             mock_client.upsert.call_args.args[1]
+
+    for p in points:
+        assert p.payload["type_source"] == "inferred"

@@ -111,7 +111,7 @@ class TestFrontmatter:
         assert doc["projects"] == ["medusa"]
 
     def test_frontmatter_missing(self, tmp_path: Path):
-        """Files without frontmatter get empty/None defaults."""
+        """Files without frontmatter get empty/None defaults (type is inferred, not None)."""
         _md(tmp_path, "bare.md", NO_FRONTMATTER_MD)
 
         results = scan(tmp_path)
@@ -119,7 +119,8 @@ class TestFrontmatter:
         assert len(results) == 1
         doc = results[0]
         assert doc["tags"] == []
-        assert doc["type"] is None
+        # type is now inferred from folder path (no folder match → "note")
+        assert doc["type"] == "note"
         assert doc["created"] is None
         assert doc["status"] is None
         assert doc["projects"] == []
@@ -171,3 +172,85 @@ class TestScanOutput:
             assert isinstance(doc["projects"], list)
             assert isinstance(doc["doc_hash"], str)
             assert len(doc["doc_hash"]) == 64  # SHA-256 hex length
+
+
+# ---------------------------------------------------------------------------
+# Doc-type inference tests
+# ---------------------------------------------------------------------------
+
+class TestDocTypeInference:
+    def test_sessions_folder_infers_session(self, tmp_path: Path):
+        _md(tmp_path, "sessions/2026-01-01-daily.md", NO_FRONTMATTER_MD)
+        result = scan(tmp_path)[0]
+        assert result["type"] == "session"
+
+    def test_todos_folder_infers_todos(self, tmp_path: Path):
+        _md(tmp_path, "todos/Active TODOs.md", NO_FRONTMATTER_MD)
+        result = scan(tmp_path)[0]
+        assert result["type"] == "todos"
+
+    def test_projects_folder_infers_project(self, tmp_path: Path):
+        _md(tmp_path, "projects/medusa/overview.md", NO_FRONTMATTER_MD)
+        result = scan(tmp_path)[0]
+        assert result["type"] == "project"
+
+    def test_architecture_adr_pattern(self, tmp_path: Path):
+        _md(tmp_path, "projects/medusa/architecture/0003-hosting.md", NO_FRONTMATTER_MD)
+        result = scan(tmp_path)[0]
+        assert result["type"] == "adr"
+
+    def test_components_folder_infers_component(self, tmp_path: Path):
+        _md(tmp_path, "components/button.md", NO_FRONTMATTER_MD)
+        result = scan(tmp_path)[0]
+        assert result["type"] == "component"
+
+    def test_unknown_folder_infers_note(self, tmp_path: Path):
+        _md(tmp_path, "random/deep/path.md", NO_FRONTMATTER_MD)
+        result = scan(tmp_path)[0]
+        assert result["type"] == "note"
+
+    def test_frontmatter_type_takes_precedence(self, tmp_path: Path):
+        _md(tmp_path, "sessions/2026-01-01-daily.md", FRONTMATTER_MD)
+        result = scan(tmp_path)[0]
+        # FRONTMATTER_MD has type: note in frontmatter — must win over folder inference
+        assert result["type"] == "note"
+
+    def test_type_source_frontmatter_when_explicit(self, tmp_path: Path):
+        _md(tmp_path, "sessions/daily.md", FRONTMATTER_MD)
+        result = scan(tmp_path)[0]
+        assert result["type_source"] == "frontmatter"
+
+    def test_type_source_inferred_when_missing(self, tmp_path: Path):
+        _md(tmp_path, "sessions/daily.md", NO_FRONTMATTER_MD)
+        result = scan(tmp_path)[0]
+        assert result["type_source"] == "inferred"
+
+    def test_specs_folder_infers_spec(self, tmp_path: Path):
+        _md(tmp_path, "projects/medusa/specs/api-design.md", NO_FRONTMATTER_MD)
+        result = scan(tmp_path)[0]
+        assert result["type"] == "spec"
+
+
+# ---------------------------------------------------------------------------
+# Inline tag harvesting tests
+# ---------------------------------------------------------------------------
+
+class TestInlineTagHarvesting:
+    def test_inline_tags_merged_with_frontmatter_tags(self, tmp_path: Path):
+        content = "---\ntags: [existing]\n---\n\nSome text with #newtag here."
+        _md(tmp_path, "notes/test.md", content)
+        result = scan(tmp_path)[0]
+        assert "existing" in result["tags"]
+        assert "newtag" in result["tags"]
+
+    def test_inline_tags_deduplicated(self, tmp_path: Path):
+        content = "---\ntags: [mytag]\n---\n\n#mytag appears again."
+        _md(tmp_path, "notes/test.md", content)
+        result = scan(tmp_path)[0]
+        assert result["tags"].count("mytag") == 1
+
+    def test_inline_tags_skip_code_fence(self, tmp_path: Path):
+        content = "---\ntags: []\n---\n\nCode:\n```\n#notatag\n```\n"
+        _md(tmp_path, "notes/test.md", content)
+        result = scan(tmp_path)[0]
+        assert "notatag" not in result["tags"]
