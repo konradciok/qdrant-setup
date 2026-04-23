@@ -69,6 +69,17 @@ def _get_bm25() -> BM25Embedder:
     return _bm25
 
 
+_reranker: "CrossEncoderReranker | None" = None
+
+
+def _get_reranker() -> "CrossEncoderReranker":
+    global _reranker
+    if _reranker is None:
+        from vault_qdrant.embedder import CrossEncoderReranker
+        _reranker = CrossEncoderReranker()
+    return _reranker
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -128,36 +139,39 @@ def vault_search(
     tags: list[str] | None = None,
     folder: str | None = None,
     status: str | None = None,
+    rerank: bool = False,
 ) -> list[dict]:
     """Hybrid semantic + keyword search over the Obsidian vault.
 
     Combines dense vector similarity (BAAI/bge-large-en-v1.5) with BM25 sparse
-    retrieval using server-side Reciprocal Rank Fusion. Returns ranked chunks with
-    relevance scores (higher = better). Use when the user asks about a topic,
-    wants to find notes, or needs context from the knowledge base.
+    retrieval using server-side Reciprocal Rank Fusion. Returns ranked chunks.
 
-    Optional filters narrow results before ranking:
-    - doc_type: e.g. "note", "project", "spec", "meeting"
-    - tags: list of tags (any match)
-    - folder: exact folder name (e.g. "projects")
-    - status: e.g. "active", "archived"
+    Optional filters: doc_type, tags, folder, status.
+    Set rerank=True to apply cross-encoder reranking (~200ms extra latency).
+
+    Example: vault_search("deployment infrastructure", doc_type="session", rerank=True)
     """
     client = _get_client()
     dense_vec = _get_dense().embed(query)
     sparse_vec = _get_bm25().embed(query)
     query_filter = _build_filter(doc_type=doc_type, tags=tags, folder=folder, status=status)
 
+    fetch_limit = max(limit * 3, 20) if rerank else limit
     hits = client.query_points(
         collection_name=VAULT_COLLECTION,
         prefetch=[
-            Prefetch(query=dense_vec, using=DENSE_FIELD, limit=20),
-            Prefetch(query=sparse_vec, using=SPARSE_FIELD, limit=20),
+            Prefetch(query=dense_vec, using=DENSE_FIELD, limit=50),
+            Prefetch(query=sparse_vec, using=SPARSE_FIELD, limit=50),
         ],
         query=FusionQuery(fusion=Fusion.RRF),
-        limit=limit,
+        limit=fetch_limit,
         query_filter=query_filter,
         with_payload=True,
     ).points
+
+    if rerank:
+        formatted = [_format_hit(h) for h in hits]
+        return _get_reranker().rerank(query, formatted)[:limit]
 
     return [_format_hit(h) for h in hits]
 
@@ -196,8 +210,8 @@ def vault_search_filtered(
     hits = client.query_points(
         collection_name=VAULT_COLLECTION,
         prefetch=[
-            Prefetch(query=dense_vec, using=DENSE_FIELD, limit=20),
-            Prefetch(query=sparse_vec, using=SPARSE_FIELD, limit=20),
+            Prefetch(query=dense_vec, using=DENSE_FIELD, limit=50),
+            Prefetch(query=sparse_vec, using=SPARSE_FIELD, limit=50),
         ],
         query=FusionQuery(fusion=Fusion.RRF),
         limit=limit,

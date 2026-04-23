@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from vault_qdrant.mcp_server import _format_hit, vault_search_documents
+from vault_qdrant.mcp_server import _format_hit, vault_search, vault_search_documents
 
 
 def _make_hit(payload: dict, score: float = 0.75) -> MagicMock:
@@ -112,3 +112,53 @@ def test_vault_search_documents_prefers_title_chunk_on_tie():
         results = vault_search_documents("query")
 
     assert results[0]["is_title_chunk"] is True
+
+
+def test_vault_search_rerank_invokes_reranker():
+    """When rerank=True, _get_reranker().rerank() must be called."""
+    hits = [_make_search_hit("a.md", 0.5), _make_search_hit("b.md", 0.9)]
+    mock_result = MagicMock()
+    mock_result.points = hits
+
+    with patch("vault_qdrant.mcp_server._get_client") as mock_client_fn, \
+         patch("vault_qdrant.mcp_server._get_dense") as mock_dense_fn, \
+         patch("vault_qdrant.mcp_server._get_bm25") as mock_bm25_fn, \
+         patch("vault_qdrant.mcp_server._get_reranker") as mock_reranker_fn:
+
+        mock_client = MagicMock()
+        mock_client.query_points.return_value = mock_result
+        mock_client_fn.return_value = mock_client
+        mock_dense_fn.return_value = MagicMock(embed=MagicMock(return_value=[0.1] * 1024))
+        mock_bm25_fn.return_value = MagicMock(
+            embed=MagicMock(return_value=MagicMock(indices=[1], values=[0.5]))
+        )
+        mock_reranker = MagicMock()
+        mock_reranker.rerank.return_value = [_format_hit(h) for h in hits]
+        mock_reranker_fn.return_value = mock_reranker
+
+        vault_search("query", limit=2, rerank=True)
+
+        mock_reranker.rerank.assert_called_once()
+
+
+def test_vault_search_default_no_rerank():
+    """When rerank=False (default), _get_reranker must not be called."""
+    mock_result = MagicMock()
+    mock_result.points = []
+
+    with patch("vault_qdrant.mcp_server._get_client") as mock_client_fn, \
+         patch("vault_qdrant.mcp_server._get_dense") as mock_dense_fn, \
+         patch("vault_qdrant.mcp_server._get_bm25") as mock_bm25_fn, \
+         patch("vault_qdrant.mcp_server._get_reranker") as mock_reranker_fn:
+
+        mock_client = MagicMock()
+        mock_client.query_points.return_value = mock_result
+        mock_client_fn.return_value = mock_client
+        mock_dense_fn.return_value = MagicMock(embed=MagicMock(return_value=[0.1] * 1024))
+        mock_bm25_fn.return_value = MagicMock(
+            embed=MagicMock(return_value=MagicMock(indices=[1], values=[0.5]))
+        )
+
+        vault_search("query", limit=5)
+
+        mock_reranker_fn.assert_not_called()
