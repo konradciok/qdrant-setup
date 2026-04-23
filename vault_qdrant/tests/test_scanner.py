@@ -225,6 +225,11 @@ class TestDocTypeInference:
         result = scan(tmp_path)[0]
         assert result["type_source"] == "inferred"
 
+    def test_specs_folder_infers_spec(self, tmp_path: Path):
+        _md(tmp_path, "projects/medusa/specs/api-design.md", NO_FRONTMATTER_MD)
+        result = scan(tmp_path)[0]
+        assert result["type"] == "spec"
+
 
 # ---------------------------------------------------------------------------
 # Inline tag harvesting tests
