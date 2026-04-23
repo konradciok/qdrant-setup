@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from vault_qdrant.mcp_server import _format_hit, vault_ask, vault_related_notes, vault_search, vault_search_documents, vault_stats as _vault_stats
+from vault_qdrant.mcp_server import _format_hit, vault_related_notes, vault_search, vault_search_documents, vault_stats as _vault_stats
 
 
 def _make_hit(payload: dict, score: float = 0.75) -> MagicMock:
@@ -163,53 +163,6 @@ def test_vault_search_default_no_rerank():
 
         mock_reranker_fn.assert_not_called()
 
-
-def test_vault_ask_returns_answer_and_sources():
-    """vault_ask must return a dict with 'answer' str and 'sources' list."""
-    mock_hits = [
-        {"file_path": "projects/plan.md", "h1": "Plan", "score": 0.8, "text": "Task 0.1: Confirm domains."},
-    ]
-    mock_response = MagicMock()
-    mock_response.content = [MagicMock(text="The phase 0 tasks are: confirm domains.")]
-
-    with patch("vault_qdrant.mcp_server.vault_search", return_value=mock_hits), \
-         patch("vault_qdrant.mcp_server._get_anthropic_client") as mock_client_fn:
-
-        mock_client = MagicMock()
-        mock_client.messages.create.return_value = mock_response
-        mock_client_fn.return_value = mock_client
-
-        result = vault_ask("What are the phase 0 tasks?")
-
-    assert "answer" in result
-    assert isinstance(result["answer"], str)
-    assert len(result["answer"]) > 0
-    assert "sources" in result
-    assert isinstance(result["sources"], list)
-
-
-def test_vault_ask_deduplicates_sources():
-    """Sources must be deduplicated by file_path."""
-    mock_hits = [
-        {"file_path": "a.md", "h1": "A", "score": 0.9, "text": "content"},
-        {"file_path": "a.md", "h1": "A", "score": 0.8, "text": "more"},
-        {"file_path": "b.md", "h1": "B", "score": 0.7, "text": "other"},
-    ]
-    mock_response = MagicMock()
-    mock_response.content = [MagicMock(text="answer")]
-
-    with patch("vault_qdrant.mcp_server.vault_search", return_value=mock_hits), \
-         patch("vault_qdrant.mcp_server._get_anthropic_client") as mock_client_fn:
-
-        mock_client = MagicMock()
-        mock_client.messages.create.return_value = mock_response
-        mock_client_fn.return_value = mock_client
-
-        result = vault_ask("query")
-
-    file_paths = [s["file_path"] for s in result["sources"]]
-    assert file_paths.count("a.md") == 1, "a.md must appear only once in sources"
-    assert "b.md" in file_paths
 
 
 def test_vault_related_notes_excludes_source_file():
