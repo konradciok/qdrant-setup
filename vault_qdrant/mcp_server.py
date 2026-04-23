@@ -209,6 +209,78 @@ def vault_search_filtered(
 
 
 @mcp.tool()
+def vault_search_documents(
+    query: str,
+    limit: int = 5,
+    doc_type: str | None = None,
+    tags: list[str] | None = None,
+    folder: str | None = None,
+    status: str | None = None,
+) -> list[dict]:
+    """Document-level hybrid search — returns the best matching document per file.
+
+    Unlike vault_search (which returns raw chunks), this groups results by source
+    file and surfaces the highest-scoring chunk per document. Use this when you
+    want to find which *notes* are most relevant, not which specific passages.
+
+    Example: vault_search_documents("phase 0 deployment plan") returns the
+    deployment plan file as rank #1, even if a session note discussing it
+    ranks higher at the raw-chunk level.
+
+    Optional filters: doc_type, tags, folder, status.
+    """
+    client = _get_client()
+    dense_vec = _get_dense().embed(query)
+    sparse_vec = _get_bm25().embed(query)
+    query_filter = _build_filter(doc_type=doc_type, tags=tags, folder=folder, status=status)
+
+    fetch_limit = max(limit * 3, 15)
+    hits = client.query_points(
+        collection_name=VAULT_COLLECTION,
+        prefetch=[
+            Prefetch(query=dense_vec, using=DENSE_FIELD, limit=50),
+            Prefetch(query=sparse_vec, using=SPARSE_FIELD, limit=50),
+        ],
+        query=FusionQuery(fusion=Fusion.RRF),
+        limit=fetch_limit,
+        query_filter=query_filter,
+        with_payload=True,
+    ).points
+
+    best: dict[str, Any] = {}
+    for hit in hits:
+        p = hit.payload or {}
+        fp = p.get("file_path")
+        if not fp:
+            continue
+        existing = best.get(fp)
+        if existing is None:
+            best[fp] = hit
+        elif hit.score > existing.score:
+            best[fp] = hit
+        elif hit.score == existing.score and p.get("is_title_chunk"):
+            best[fp] = hit
+
+    ranked = sorted(best.values(), key=lambda h: h.score, reverse=True)[:limit]
+
+    return [
+        {
+            "file_path": (h.payload or {}).get("file_path"),
+            "best_score": round(h.score, 4),
+            "doc_type": (h.payload or {}).get("doc_type"),
+            "h1": (h.payload or {}).get("h1"),
+            "tags": (h.payload or {}).get("tags", []),
+            "status": (h.payload or {}).get("status"),
+            "modified_at": (h.payload or {}).get("modified_at"),
+            "forward_links": (h.payload or {}).get("forward_links", []),
+            "is_title_chunk": (h.payload or {}).get("is_title_chunk", False),
+            "text": ((h.payload or {}).get("text") or "")[:600],
+        }
+        for h in ranked
+    ]
+
+
+@mcp.tool()
 def vault_get_chunks(file_path: str) -> list[dict]:
     """Return all indexed chunks for a specific vault note in reading order.
 
