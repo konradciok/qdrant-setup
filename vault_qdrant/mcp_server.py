@@ -1,10 +1,17 @@
 """Vault MCP server — knowledge-base tools over the Qdrant vault collection.
 
 Tools exposed:
-  vault_search          Hybrid RRF search (dense + BM25), optional filters
-  vault_search_filtered Explicit filter axes: doc_type, tags, folder, status, date
-  vault_get_chunks      All chunks for a file in order
-  vault_outline         Heading hierarchy (h1/h2/h3) for a file, no body text
+  vault_search              Hybrid RRF search (dense + BM25), optional filters and rerank
+  vault_search_filtered     Explicit filter axes: doc_type, tags, folder, status, date
+  vault_search_documents    Document-level hybrid search (best chunk per file)
+  vault_get_chunks          All chunks for a file in order
+  vault_outline             Heading hierarchy (h1/h2/h3) for a file, no body text
+  vault_find_backlinks      Notes that link to a given file via forward_links
+  vault_list_recent         Most recently modified notes
+  vault_list_by_tag         All files carrying a specific tag
+  vault_ask                 Answer a question using vault knowledge (Claude synthesis)
+  vault_related_notes       Semantically similar documents to a given file
+  vault_stats               Collection summary + quality metrics
   vault_find_backlinks  Notes that link to a given file via forward_links
   vault_list_recent     Most recently modified notes
   vault_list_by_tag     All files carrying a specific tag
