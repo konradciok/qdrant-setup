@@ -12,10 +12,6 @@ Tools exposed:
   vault_ask                 Answer a question using vault knowledge (Claude synthesis)
   vault_related_notes       Semantically similar documents to a given file
   vault_stats               Collection summary + quality metrics
-  vault_find_backlinks  Notes that link to a given file via forward_links
-  vault_list_recent     Most recently modified notes
-  vault_list_by_tag     All files carrying a specific tag
-  vault_stats           Collection summary (counts, doc_type breakdown, top tags)
 """
 
 from __future__ import annotations
@@ -76,10 +72,10 @@ def _get_bm25() -> BM25Embedder:
     return _bm25
 
 
-_reranker: "CrossEncoderReranker | None" = None
+_reranker: CrossEncoderReranker | None = None
 
 
-def _get_reranker() -> "CrossEncoderReranker":
+def _get_reranker() -> CrossEncoderReranker:
     global _reranker
     if _reranker is None:
         from vault_qdrant.embedder import CrossEncoderReranker
@@ -87,15 +83,14 @@ def _get_reranker() -> "CrossEncoderReranker":
     return _reranker
 
 
-_anthropic_client = None
+_anthropic_client: "Anthropic | None" = None
 
 
-def _get_anthropic_client():
+def _get_anthropic_client() -> "Anthropic":
     global _anthropic_client
     if _anthropic_client is None:
-        import os as _os
         from anthropic import Anthropic
-        _anthropic_client = Anthropic(api_key=_os.environ.get("ANTHROPIC_API_KEY"))
+        _anthropic_client = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
     return _anthropic_client
 
 
@@ -501,13 +496,15 @@ def vault_ask(
     limit: int = 8,
     doc_type: str | None = None,
     tags: list[str] | None = None,
-    rerank: bool = True,
+    rerank: bool = False,
 ) -> dict:
     """Answer a question using knowledge from the vault.
 
     Retrieves relevant chunks via hybrid search, then calls Claude (Haiku) to
     synthesize a direct answer grounded in vault content. Returns the answer and
     the source notes used.
+
+    Set rerank=True to apply cross-encoder reranking before synthesis (~200ms extra latency).
 
     Example: vault_ask("What decisions were made for the production hosting stack?")
     Returns: {"answer": "...", "sources": [{"file_path": "...", "h1": "...", "score": 0.9}]}

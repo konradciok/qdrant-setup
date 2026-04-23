@@ -96,7 +96,7 @@ class CrossEncoderReranker:
     def __init__(self) -> None:
         self._model = None
 
-    def _load_model(self):
+    def _load_model(self) -> "CrossEncoder":
         try:
             from sentence_transformers import CrossEncoder
         except ImportError as exc:
