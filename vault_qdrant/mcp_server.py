@@ -80,6 +80,18 @@ def _get_reranker() -> "CrossEncoderReranker":
     return _reranker
 
 
+_anthropic_client = None
+
+
+def _get_anthropic_client():
+    global _anthropic_client
+    if _anthropic_client is None:
+        import os as _os
+        from anthropic import Anthropic
+        _anthropic_client = Anthropic(api_key=_os.environ.get("ANTHROPIC_API_KEY"))
+    return _anthropic_client
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -474,6 +486,65 @@ def vault_list_by_tag(tag: str, limit: int = 50) -> list[str]:
                 break
 
     return sorted(result)
+
+
+@mcp.tool()
+def vault_ask(
+    query: str,
+    limit: int = 8,
+    doc_type: str | None = None,
+    tags: list[str] | None = None,
+    rerank: bool = True,
+) -> dict:
+    """Answer a question using knowledge from the vault.
+
+    Retrieves relevant chunks via hybrid search, then calls Claude (Haiku) to
+    synthesize a direct answer grounded in vault content. Returns the answer and
+    the source notes used.
+
+    Example: vault_ask("What decisions were made for the production hosting stack?")
+    Returns: {"answer": "...", "sources": [{"file_path": "...", "h1": "...", "score": 0.9}]}
+    """
+    hits = vault_search(query, limit=limit, doc_type=doc_type, tags=tags, rerank=rerank)
+
+    if not hits:
+        return {"answer": "No relevant content found in the vault.", "sources": []}
+
+    context_parts = []
+    for hit in hits:
+        fp = hit.get("file_path", "unknown")
+        text = hit.get("text", "")
+        context_parts.append(f"[{fp}]\n{text}")
+    context = "\n\n---\n\n".join(context_parts)
+
+    client = _get_anthropic_client()
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=1024,
+        system=(
+            "You are a knowledge assistant with access to vault excerpts. "
+            "Answer using only the provided excerpts. Cite sources by file_path in brackets. "
+            "If the answer is not in the excerpts, say so explicitly."
+        ),
+        messages=[
+            {
+                "role": "user",
+                "content": f"Vault excerpts:\n\n{context}\n\nQuestion: {query}",
+            }
+        ],
+    )
+
+    answer = response.content[0].text
+
+    seen_fps: set[str] = set()
+    sources: list[dict] = []
+    for hit in hits:
+        fp = hit.get("file_path")
+        if fp and fp not in seen_fps:
+            seen_fps.add(fp)
+            sources.append({"file_path": fp, "h1": hit.get("h1"), "score": hit.get("score")})
+
+    return {"answer": answer, "sources": sources}
 
 
 @mcp.tool()
